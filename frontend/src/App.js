@@ -136,7 +136,7 @@ function App() {
     setError("");
     try {
       if (editId) {
-        await api.put(`/products${editId}`, {
+        await api.put(`/products/${editId}`, {
           ...form,
           id: Number(form.id),
           price: Number(form.price),
