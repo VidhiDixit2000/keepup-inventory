@@ -352,7 +352,7 @@ Inbound rules:
 | SSH | 22 | Server administration |
 | TCP | 8000 | FastAPI API — must be open to `0.0.0.0/0` for the Netlify proxy |
 
-Port `8000` is open to `0.0.0.0/0` because the proxy requires it, not as a development shortcut: Netlify's edge connects inbound from a changing pool of addresses, so the port cannot be restricted by IP. See [What this approach gives up](#what-this-approach-gives-up) for the consequences.
+Port `8000` is open to `0.0.0.0/0` because the proxy requires it, not as a development shortcut: Netlify's edge connects inbound from a changing pool of addresses, so the port cannot be restricted by IP. See [What this approach gives up](#what-this-approach-gives-up) for the consequences. The reasoning behind both this port and port 22 is worked through in [Security Posture and Known Gaps](#-security-posture-and-known-gaps).
 
 For a production deployment, access rules should be restricted appropriately rather than exposing development ports publicly.
 
@@ -537,11 +537,14 @@ established outbound from the instance.
 | Own domain required | No | No |
 
 **Why the proxy is nevertheless the right choice here.** This application serves
-non-sensitive inventory records with no authentication and no personal data. The
-same records are readable through the public site, so an open port 8000 exposes
-nothing that is not already public, and an unencrypted hop carries nothing worth
-intercepting. Against that, removing a long-running daemon removes the component
-that actually failed twice.
+non-sensitive inventory records with no authentication and no personal data.
+The same records are readable through the public site, so an open port 8000
+exposes nothing beyond what the public site already shows on reads — but the
+CRUD endpoints are unauthenticated, so `POST`, `PUT` and `DELETE` are reachable
+by anyone and the inventory can be modified or deleted. An unencrypted hop
+carries nothing worth intercepting. Against that, removing a long-running daemon
+removes the component that actually failed twice. See [Security Posture and
+Known Gaps](#-security-posture-and-known-gaps) for the full treatment.
 
 Were this handling real user data, the conclusion would reverse — and the proper
 answer would not be either option above. It would be **TLS on the backend
@@ -577,6 +580,122 @@ that the backend's public address kept changing. Attempts 2 and 3 tried to keep 
 moving address alive; attempt 4 removes the need for a second address at all, by
 routing through one that was already stable — and pays for that simplicity in
 exposure.
+
+---
+
+## 🔒 Security Posture and Known Gaps
+
+This is a learning and portfolio project, not a hardened production deployment.
+The gaps below are known and deliberate rather than overlooked, and each is
+recorded with the reasoning behind it and the work that would close it.
+
+The deployment began with a Cloudflare tunnel, which encrypted the entire path
+to the backend and required no inbound port at all. It was replaced with the
+Netlify proxy for operational simplicity, after the tunnel's instability caused
+repeated outages. That exchange is documented in
+[How the Frontend–Backend Connection Evolved](#-how-the-frontendbackend-connection-evolved).
+The sections below state what it cost.
+
+### Gap 1 — The API has no authentication
+
+**The exposure.** Port 8000 is open to `0.0.0.0/0`, because Netlify's edge
+connects inbound from a changing pool of addresses that cannot be restricted by
+IP. The FastAPI endpoints require no credentials. Anyone who knows the
+instance's address can therefore reach the API directly, bypassing the frontend
+entirely:
+
+```bash
+curl -X DELETE http://<EC2_PUBLIC_IP>:8000/products/1
+```
+
+Read access is of no consequence — the same records are visible to any visitor
+on the public site. **Write access is the real gap:** `POST`, `PUT` and `DELETE`
+are reachable by anyone, so the inventory can be modified or deleted by a
+stranger.
+
+**Why it is acceptable here.** The data is fabricated inventory records with no
+personal, financial or confidential content. The worst outcome is a defaced
+demo, recoverable by reseeding the database.
+
+**How it would be closed.** An API key on the write endpoints: `POST`, `PUT` and
+`DELETE` require a header carrying a shared secret, while `GET` stays open so the
+public demo continues to work without credentials. The key would be supplied to
+FastAPI as an environment variable and to the frontend at build time, in the same
+way the database URL already is. This is a small change confined to the backend,
+and it is the highest-value next step.
+
+A fuller version would replace the shared key with per-user authentication —
+JWT-based login, hashed passwords, and ownership on records — which also makes
+the application multi-user rather than a single shared inventory.
+
+### Gap 2 — SSH is open to the internet
+
+**The exposure.** Inbound port 22 accepts connections from `0.0.0.0/0`.
+
+**Why it is open.** Deployment runs through GitHub Actions, which executes on
+GitHub-hosted runners: ephemeral machines drawn from a large, changing address
+pool. There is no stable address to permit. Restricting port 22 to a single
+home IP secures the instance but prevents the pipeline from deploying at all —
+the two requirements are in direct conflict.
+
+**Why the risk is lower than it appears.** The instance accepts **key-based
+authentication only**; password login is disabled, as is standard on EC2.
+Automated scanners probe port 22 on every public host continuously, but without
+the private key they gain nothing. An exposed port 22 with password
+authentication disabled is a widely accepted configuration.
+
+**How it would be closed.** Two approaches remove the open port entirely:
+
+- **AWS Systems Manager Session Manager.** An agent on the instance connects
+  outbound to AWS, and the deployment authenticates to AWS rather than over SSH.
+  Port 22 closes completely. The agent ships preinstalled on current Ubuntu and
+  Amazon Linux images, and Session Manager is free; the work is attaching an IAM
+  role and reworking the workflow step.
+- **A self-hosted GitHub Actions runner** on the instance, which polls GitHub
+  outbound and needs no inbound port. **This is not appropriate for this
+  repository**, because it is public: a fork can submit a pull request that runs
+  arbitrary code on the runner, and therefore on the server. It is recorded here
+  as a rejected option, not a recommendation.
+
+### Gap 3 — The Netlify-to-EC2 hop is unencrypted
+
+**The exposure.** Netlify's edge reaches the backend over plain HTTP, so that
+segment crosses the public internet in cleartext. The browser-to-Netlify
+segment is HTTPS and unaffected.
+
+**Why it is acceptable here.** The traffic carries no credentials, tokens or
+personal data — only the same inventory records the site displays publicly.
+
+**How it would be closed.** TLS on the backend itself: a domain name with Caddy
+or nginx terminating HTTPS in front of FastAPI using a Let's Encrypt
+certificate. The frontend would then call `https://api.<domain>` directly, with
+no proxy and no tunnel, and port 8000 would close to the public. Returning to a
+**named** Cloudflare tunnel would also restore end-to-end encryption and a closed
+port, without requiring a domain.
+
+### What is already in place
+
+- Secrets are not committed. Database credentials, the EC2 host and the SSH key
+  are supplied as environment variables and GitHub Actions secrets, and
+  `DATABASE_URL` is read from the environment rather than hardcoded.
+- A `.dockerignore` prevents local environment files from being copied into the
+  image during `docker build`.
+- SSH uses key-based authentication only.
+- The frontend never calls the backend over plain HTTP from the browser, so no
+  mixed-content path exists.
+
+### Priority of the remaining work
+
+| Priority | Gap | Work required |
+|---|---|---|
+| 1 | Unauthenticated write endpoints | API key header on `POST`, `PUT`, `DELETE` |
+| 2 | Open SSH port | AWS Systems Manager, replacing the SSH step |
+| 3 | Unencrypted backend hop | TLS on the backend, or a named Cloudflare tunnel |
+| 4 | No rate limiting on the API | Per-IP request limits, via `slowapi` in FastAPI or at the proxy layer |
+
+The ordering reflects exposure rather than effort. Gap 1 is the only one
+reachable by someone with no credentials and no privileged network position, and
+it is also the cheapest to fix.
 
 ---
 
@@ -744,6 +863,9 @@ This project demonstrates practical experience with:
 - Git/GitHub-based workflow
 - CI/CD with GitHub Actions
 - Debugging deployed applications
+- HTTPS/mixed-content constraint driving deployment choices
+- Trade-off between tunnelled and proxied backend access
+- Documenting authentication gaps as known, unresolved risk
 
 ---
 
