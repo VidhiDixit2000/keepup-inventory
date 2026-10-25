@@ -1,0 +1,2 @@
+# Proxy API calls through Netlify's edge so the HTTPS page never calls the HTTP backend directly (200 = proxy, not redirect).
+/api/*  http://32.236.100.104:8000/:splat  200
