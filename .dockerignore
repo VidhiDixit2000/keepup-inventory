@@ -1,0 +1,22 @@
+# Secrets — DATABASE_URL reaches the container through docker-compose's
+# environment block at runtime, never from a file baked into the image.
+.env
+
+# Python environments and bytecode
+.venvgh/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Frontend (deployed separately to Netlify)
+frontend/node_modules/
+frontend/build/
+
+# Repo and editor metadata
+.git/
+.github/
+.vscode/
+*.code-workspace
+*.log
+README.md

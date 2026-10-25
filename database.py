@@ -4,7 +4,6 @@ from sqlalchemy.orm import sessionmaker
 # Load variables from .env
 #load_dotenv()
 
-#url="postgresql://postgres:Vidhi%401234@localhost:5432/postgres"
 url = os.getenv("DATABASE_URL")
 engine=create_engine(url)
 SessionLocal = sessionmaker(autoflush=False, bind=engine)

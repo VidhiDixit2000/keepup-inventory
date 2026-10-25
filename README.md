@@ -80,11 +80,9 @@ Inside Docker Compose, FastAPI communicates with PostgreSQL using the PostgreSQL
 ```
 project-root/
 │
-├── backend/
-│   ├── main.py
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── ...
+├── .github/
+│   └── workflows/
+│       └── deploy.yml
 │
 ├── frontend/
 │   ├── src/
@@ -96,6 +94,12 @@ project-root/
 │   ├── .env.production
 │   └── ...
 │
+├── main.py
+├── database.py
+├── database_module.py
+├── module.py
+├── requirements.txt
+├── Dockerfile
 ├── docker-compose.yml
 └── README.md
 ```
